@@ -1,0 +1,472 @@
+---
+title: "Sociodemographic Determinants of COVID-19 Vaccine Uptake in Ontario"
+author: "Maureen Amuche Nwobodo"
+date: "2026-04-21"
+output:
+  html_document:
+    toc: true
+    toc_depth: '3'
+    number_sections: true
+    df_print: paged
+  pdf_document:
+    citation_package: biblatex
+    keep_tex: false
+    latex_engine: xelatex
+    toc: true
+    toc_depth: 3
+    number_sections: true
+subtitle: "Independent Analysis Part 1B --- Data Wrangling and Descriptive Statistics"
+bibliography: C:/Users/bds268/OneDrive - University of Saskatchewan/Desktop/USL_PCA_files/references.bib
+biblatexoptions:
+- backend=biber
+- style=numeric
+- sorting=none
+header-includes:
+- \usepackage{booktabs}
+- \usepackage{longtable}
+- \usepackage{array}
+- \usepackage{float}
+- \floatplacement{figure}{H}
+link-citations: true
+linkcolor: blue
+---
+
+
+# INTRODUCTION
+
+According to the World Health Organization (@WHO2024aimpact), COVID-19 has resulted in substantial global loss of life. In Canada, approximately 4,949,441 cases and 59,139 deaths had been reported as of April 16, 2024 [@Cascella2023]. At the provincial level, Ontario recorded about 1,609,170 cases and 16,404 deaths as of July 26, 2024 [@Little2020]. Vaccination is the most effective COVID-19 intervention (@Rees2022); analyzing uptake by age, sex, geography, and time helps identify inequities and guide targeted strategies.
+
+
+This report presents the first stage of analysis for the Ontario vaccination dataset. The focus is on importing the data, cleaning and preparing it for analysis, and producing descriptive statistics and visualizations that summarize the key features of the dataset.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# LOAD PACKAGES
+
+```{r libraries}
+library(tidyverse)   
+library(readxl)      
+library(janitor)     
+library(lubridate)   
+library(scales)      
+library(skimr)       
+library(knitr)       
+library(kableExtra)  
+library(lubridate)
+library(forcats)
+```
+
+
+# LOAD DATA
+
+```{r load-data}
+vaccine_data <- read_excel("C:/Users/bds268/OneDrive - University of Saskatchewan/Desktop/USL_PCA_files/Ontario Vaccination Status.xlsx") |>
+  clean_names()
+```
+
+
+# EXAMINE DATA STRUCTURE
+
+```{r inspect-data}
+glimpse(vaccine_data)
+```
+
+
+```{r}
+summary(vaccine_data)
+```
+
+- The four main predictor variables are all stored as text (character) and therefore do not show frequencies in summary(), The dataset covers almost three years of weekly data. The median and mean of the `week_start_date` are almost identical which suggests roughly balanced coverage over time. The `number_of_individuals_vaccinated` is strongly right-skew with a `Mean (50.49) >> median (0)` which indicates massive inequality in vaccination counts across strata. The dataset has very uneven population sizes with some strata as small as (≈800 people) and others are as large as (≈300,000 people). Also, population variables has large number of missing values ~41% of population values are missing (296,400 / 720,720 ≈ 41%).
+
+
+The table below documents the seven variables.
+
+```{r var-table, echo = FALSE}
+tibble(
+  Variable = c(
+    "public_health_unit", "gender", "age_group", "vaccination_status",
+    "week_start_date", "number_of_individuals_vaccinated", "population"
+  ),
+  Type = c("categorical", "categorical", "ordinal", "categorical",
+           "date", "count", "count"),
+  Description = c(
+    "One of 34 PHUs + 'Unknown'",
+    "Female / Male / Unknown",
+    "0 to 4 ... 80+ / Missing (11 levels)",
+    "At least one dose / primary series / +1 booster / +2 boosters",
+    "Epidemiological week start (weekly from 2020-12-13)",
+    "Count of individuals with that vaccination status (weighting variable)",
+    "2023 PHU-gender-age population denominator"
+  )
+) |>
+  kable(booktabs = TRUE, caption = "Variable dictionary") |>
+  kable_styling(latex_options = c("hold_position", "scale_down"))
+```
+
+
+# MISSING DATA ASSESEMENT 
+
+```{r missing-data}
+missing_summary <- sapply(vaccine_data, function(x) sum(is.na(x)))
+missing_summary
+```
+
+  
+```{r missing-data-proportion}
+round(colMeans(is.na(vaccine_data)) * 100, 2)
+```
+
+
+- The missingness assessment here shows that only the variable `population` has missing values which is proportional to about 41.13% of the whole observation, but it did not reflect the "Unknown" values which we observed in the table above for the `age`, `public health units` and `gender` variables.
+
+
+# DATA WRANGLING
+
+## Convert Data Types
+
+```{r clean-types}
+data <- vaccine_data |>
+  mutate(
+    public_health_unit = as.factor(public_health_unit),
+    gender = as.factor(gender),
+    age_group = factor(
+      age_group,
+      levels = c("0 to 4", "5 to 11", "12 to 17", "18 to 29", "30 to 39",
+                 "40 to 49", "50 to 59", "60 to 69", "70 to 79", "80+", "Missing"),
+      ordered = TRUE
+    ),
+    vaccination_status = factor(
+      vaccination_status,
+      levels = c(
+        "At least one dose",
+        "Completed primary series",
+        "Completed primary series and 1 booster dose",
+        "Completed primary series and 2+ booster doses"
+      )
+    ),
+    week_start_date = as.Date(week_start_date)
+  )
+```
+
+
+## Create Derived Variables
+
+```{r create-variables}
+data <- data |>
+  mutate(
+    vaccination_coverage = ifelse(
+      !is.na(population) & population > 0,
+      number_of_individuals_vaccinated / population,
+      NA_real_
+    ),
+    year = year(week_start_date),
+    month = month(week_start_date, label = TRUE, abbr = TRUE)
+  )
+```
+
+
+## Check Cleaned Structure
+
+```{r cleaned-glimpse}
+glimpse(data)
+```
+
+
+# DESCRIPTIVE STATISTICS
+
+## Frequencies for Categorical Variables
+
+```{r frequency-tables}
+table(data$gender)
+table(data$age_group, useNA = "ifany")
+table(data$vaccination_status)
+```
+
+-  The dataset contains an equal number of stratified records for each gender, age group, and vaccination status. Counts represent reporting strata rather than individuals since the dataset is aggregated.
+
+
+## Summary of Numeric Variables
+
+```{r numeric-summary}
+data |>
+  select(number_of_individuals_vaccinated, population, vaccination_coverage) |>
+  summary()
+```
+
+
+## Quick Data Overview
+
+```{r skim-data}
+skimr::skim(data)
+```
+ 
+ 
+ 
+## Grouped Descriptive Statistics
+
+### Total Vaccinated Individuals by Vaccination Status
+
+```{r by-vaccination-status}
+data |>
+  group_by(vaccination_status) |>
+  summarise(
+    total_vaccinated = sum(number_of_individuals_vaccinated, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+- Cumulatively, approximately 12.7 million individuals received at least one COVID‑19 vaccine dose during the study period, with nearly all completing the primary series. Booster uptake was lower, with about 7.7 million individuals receiving at least one booster dose and approximately 3.8 million receiving two or more boosters, indicating progressive decline in vaccination uptake with increasing dose number.
+
+
+### Total Vaccinated Individuals by Gender
+
+```{r by-gender}
+data |>
+  group_by(gender) |>
+  summarise(
+    total_vaccinated = sum(number_of_individuals_vaccinated, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+- In aggregate, a greater number of vaccinations were administered to females (18.9 million) than to males (17.4 million) over the study period, while vaccinations with unknown gender accounted for a negligible proportion of records. This table above reflect cumulative vaccination counts rather than unique individuals. 
+
+
+
+### Total Vaccinated Individuals by Age Group
+
+```{r by-age-group}
+data |>
+  group_by(age_group) |>
+  summarise(
+    total_vaccinated = sum(number_of_individuals_vaccinated, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+ - Vaccination counts varied substantially by age group, with the highest cumulative numbers observed among adults aged 18–69 years, particularly those aged 60–69. Lower totals among children and adolescents likely reflect later eligibility and smaller vaccination volumes, while reduced counts in the oldest age groups are consistent with smaller population sizes rather than lower coverage.
+
+
+### Average Vaccination Coverage by Vaccination Status
+
+```{r coverage-summary}
+data |>
+  group_by(vaccination_status) |>
+  summarise(
+    mean_coverage = mean(vaccination_coverage, na.rm = TRUE),
+    median_coverage = median(vaccination_coverage, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+
+# VISUALIZATIONS
+
+## Distribution of Vaccination Status
+
+```{r plot-vaccination-status, fig.width=8, fig.height=5}
+ggplot(data, aes(x = vaccination_status)) +
+  geom_bar() +
+  labs(
+    title = "Distribution of Vaccination Status Categories",
+    x = "Vaccination status",
+    y = "Number of records"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+```
+
+- The distribution of records across vaccination status categories is uniform, reflecting the stratified structure of the dataset rather than differences in vaccination uptake. Each vaccination status category is represented by a similar number of reporting records across demographic groups and time periods.
+
+
+## Total Vaccinated Individuals by Gender
+
+```{r plot-gender, fig.width=8, fig.height=5}
+data |>
+  group_by(gender) |>
+  summarise(total_vaccinated = sum(number_of_individuals_vaccinated, na.rm = TRUE)) |>
+  ggplot(aes(x = gender, y = total_vaccinated)) +
+  geom_col() +
+  labs(
+    title = "Total Number of Vaccinated Individuals by Gender",
+    x = "Gender",
+    y = "Total vaccinated individuals"
+  ) +
+  theme_minimal()
+```
+
+- The total number of recorded vaccinations was slightly higher among females than males over the study period, while vaccinations with unknown gender accounted for a negligible proportion. These counts represent cumulative vaccination events rather than unique individuals and therefore reflect overall vaccination volume rather than coverage.
+
+
+## Total Vaccinated Individuals by Age Group
+
+```{r plot-age-group, fig.width=9, fig.height=5}
+data |>
+  group_by(age_group) |>
+  summarise(total_vaccinated = sum(number_of_individuals_vaccinated, na.rm = TRUE)) |>
+  ggplot(aes(x = age_group, y = total_vaccinated)) +
+  geom_col() +
+  labs(
+    title = "Total Number of Vaccinated Individuals by Age Group",
+    x = "Age group",
+    y = "Total vaccinated individuals"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 35, hjust = 1))
+```
+
+- Vaccination counts varied substantially by age group, with the highest cumulative totals observed among adults aged 18–69 years, particularly those aged 60–69. Lower totals among children reflect later eligibility and lower vaccination volumes, while declines in the oldest age groups are consistent with smaller population sizes rather than reduced uptake.
+
+
+## Weekly Trend in Number of Vaccinated Individuals
+
+```{r plot-time-trend, fig.width=10, fig.height=5}
+data |>
+  group_by(week_start_date) |>
+  summarise(total_vaccinated = sum(number_of_individuals_vaccinated, na.rm = TRUE)) |>
+  ggplot(aes(x = week_start_date, y = total_vaccinated)) +
+  geom_line() +
+  labs(
+    title = "Weekly Trend in Number of Vaccinated Individuals",
+    x = "Week start date",
+    y = "Total vaccinated individuals"
+  ) +
+  theme_minimal()
+```
+
+- Weekly vaccination activity increased rapidly during early 2021, reaching a peak in mid‑2021 corresponding to the initial mass vaccine rollout. This was followed by a sharp decline as primary vaccination coverage was achieved. A secondary peak in early 2022 reflects booster dose administration, after which weekly vaccination numbers gradually decreased to low levels by 2023, indicating a transition to targeted vaccination efforts.
+
+
+# Drop Categorical Placeholders for Missing Values
+
+```{r drop-missing}
+clean <- data |>
+  filter(
+    gender             != "Unknown",
+    age_group          != "Missing",
+    public_health_unit != "Unknown",
+    !is.na(population),
+    population > 0
+  )
+
+# Rows dropped
+tibble(
+  stage     = c("data", "After dropping Unknown / Missing / NA pop"),
+  rows      = c(nrow(data), nrow(clean)),
+  dropped   = c(NA_integer_, nrow(data) - nrow(clean))
+) |>
+  kable(booktabs = TRUE, caption = "Row counts before and after missing-value handling")
+```
+
+- The original dataset contained 720,720 stratified records. After excluding observations with missing or undefined population values, 424,320 records (58.9%) remained for analysis, with 296,400 records (41.1%) removed. This cleaning step was necessary to ensure valid population‑based rate calculations but reduced overall coverage of reporting strata.
+
+
+# Factor Levels with the Correct Reference Categories
+
+```{r factorize}
+age_order <- c("0 to 4", "5 to 11", "12 to 17", "18 to 29",
+               "30 to 39", "40 to 49", "50 to 59", "60 to 69",
+               "70 to 79", "80+")
+
+clean <- clean |>
+  mutate(
+    gender             = factor(gender, levels = c("Male", "Female")),
+    age_group          = factor(age_group, levels = age_order),
+    public_health_unit = fct_relevel(factor(public_health_unit),
+                                     "Toronto Public Health"),
+    vaccination_status = factor(vaccination_status),
+    week_start_date    = as.Date(week_start_date)
+  )
+
+levels(clean$gender)
+head(levels(clean$age_group), 3)
+head(levels(clean$public_health_unit), 3)
+```
+
+- Categorical variables were explicitly converted to factors with predefined reference levels to ensure meaningful statistical interpretation. Age groups were ordered chronologically, male gender and Toronto Public Health were selected as reference categories, and vaccination status was treated as a categorical variable. Week start dates were converted to date format to facilitate temporal analyses.
+
+
+# Define the Binary Outcome
+
+```{r build-binary}
+binary_long <- clean |>
+  filter(vaccination_status == "At least one dose") |>
+  transmute(
+    public_health_unit,
+    gender,
+    age_group,
+    week_start_date,
+    population,
+    n_vaccinated   = number_of_individuals_vaccinated,
+    n_unvaccinated = pmax(population - number_of_individuals_vaccinated, 0)
+  )
+
+# Sanity check
+binary_long |>
+  summarise(across(c(n_vaccinated, n_unvaccinated), sum))
+```
+
+- A binary vaccination outcome was constructed by defining vaccination as receipt of at least one dose. For each week and demographic stratum, the number of vaccinated and unvaccinated individuals was calculated using population denominators. This binary structure enabled population‑based analyses of vaccination uptake and supported subsequent regression modeling. Therefore, the outcome is *vaccinated with at least one dose* (1) vs. *not vaccinated* (0), which aligns with Guay et al. [@guay2022sociodemographic].
+
+
+# Collapse to Person-Level Summary per Stratum
+
+```{r collapse}
+uptake <- binary_long |>
+  group_by(public_health_unit, gender, age_group) |>
+  summarise(
+    population     = max(population,     na.rm = TRUE),
+    n_vaccinated   = max(n_vaccinated,   na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(
+    n_unvaccinated = pmax(population - n_vaccinated, 0),
+    uptake_rate    = n_vaccinated / population
+  )
+
+uptake
+```
+
+- Weekly vaccination records were collapsed to a single person‑level summary for each combination of public health unit, gender, and age group. Population size and cumulative vaccination counts were retained using maximum values across time to avoid double‑counting. Vaccination uptake rates were then calculated as the proportion of individuals who received at least one dose within each stratum.
+
+
+**Reason.** Weekly counts are cumulative, so the maximum across weeks is the total uptake by Dec 3, 2023. This collapses ~424,000 weekly rows into one row per PHU × Gender × Age cell, yielding a tidy stratum-level table that cleanly supports both descriptive stratified analysis and, for ML, weighted case/control expansion.
+
+
+# Prepare Tidymodels-Ready Person-Level Frame
+
+```{r expand, cache = TRUE}
+vaxed <- uptake |>
+  transmute(public_health_unit, gender, age_group,
+            weight = n_vaccinated, vaccinated = factor("Yes",
+                                                       levels = c("No","Yes"))) |>
+  uncount(weight)
+
+unvaxed <- uptake |>
+  transmute(public_health_unit, gender, age_group,
+            weight = n_unvaccinated, vaccinated = factor("No",
+                                                        levels = c("No","Yes"))) |>
+  uncount(weight)
+
+ml_data <- bind_rows(vaxed, unvaxed)
+
+dim(ml_data)
+tabyl(ml_data, vaccinated)
+```
+
+- Of the total population counts represented in the dataset, approximately 13.6% were classified as having received at least one vaccine dose, while 86.4% remained unvaccinated. This imbalance reflects population‑level denominators and underscores the importance of rate‑based analyses rather than raw counts.
+
+
+
+# CONCLUSION
+
+This data wrangling and descriptive analysis prepared the vaccination dataset for valid population‑based inference. Systematic cleaning addressed missing population denominators, clarified categorical structures through defined factor levels and reference groups, and transformed weekly surveillance records into interpretable person‑level summaries. Descriptive results highlighted substantial variation across time and demographic strata, reflecting phased vaccine rollout and uptake patterns. Overall, these steps ensured internal consistency, prevented double‑counting, and produced reliable coverage measures, providing a strong foundation for more advanced analysis in future parts of the project.
+
+
+# REFERENCES
+
+
