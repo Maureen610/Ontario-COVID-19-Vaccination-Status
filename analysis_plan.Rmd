@@ -1,0 +1,190 @@
+---
+title: "Sociodemographic Determinants of COVID-19 Vaccine Uptake in Ontario - Analysis Plan"
+author: "Maureen Amuche Nwobodo"
+date: "2026-04-19"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    df_print: paged
+  pdf_document:
+    citation_package: biblatex
+    keep_tex: false
+    latex_engine: xelatex
+    toc: true
+    toc_depth: 2
+    number_sections: true
+subtitle: "Independent Analysis Part 1A --- Data Analysis Plan"
+bibliography: C:/Users/bds268/OneDrive - University of Saskatchewan/Desktop/USL_PCA_files/references.bib
+biblatexoptions:
+- backend=biber
+- style=numeric
+- sorting=none
+link-citations: true
+linkcolor: blue
+---
+
+# PROJECT OVERVIEW
+
+## Background
+
+Coronavirus disease 2019, also known as COVID-19, is an infectious disease triggered by a strain of coronavirus known as Severe Acute Respiratory Syndrome Coronavirus (SARS-CoV-2) [@WHO2024a]. The global impact of the COVID-19 pandemic on population statistics has been catastrophic, leading to a staggering death toll around the globe [@Cascella2023]. According to the World Health Organization (@WHO2024aimpact), eyond the significant global loss of human life, the pandemic has posed an unparalleled challenge to public health, food systems, and the  labour market. Canada has documented about 4,949,441 cases of COVID-19, resulting in about 59,139 deaths as of April 16, 2024 [@Cascella2023], while in Ontario, there are about 1,609,170 cases and 16,404 deaths resulting from COVID-19 as of July 26th, 2024 [@Little2020]. 
+
+Vaccination remains one of the most important public health strategies for preventing severe disease and reducing population-level burden during infectious disease outbreaks. Vaccination is the most effective medical intervention against COVID-19; however, mutations can impact antibody 
+neutralization and reduce vaccine effectiveness [@Rees2022]. Understanding how vaccination uptake varies across age groups, sex, geography, and time can help identify inequities in vaccine coverage and inform targeted intervention strategies. This project uses an Ontario vaccination dataset to explore descriptive patterns in vaccination status across public health units, demographic groups, and weekly reporting periods.
+
+
+## Study Rationale
+
+This study is relevant as its findings would serve as future pandemic preparedness tool because when these inequalities are identified and the root cause known, it becomes easier to address as we fortify the health system in preparation for a healthier nation. Vaccination inequity remains a pressing public health concern in Canada. Previous Canadian work has documented meaningful sociodemographic disparities in COVID-19 uptake by age, gender, and region [@guay2022sociodemographic; @ortiz2024sociodemographic], and similar patterns have been reported in the United Kingdom [@nafilyan2021sociodemographic] and the United States [@nguyen2021racial; @willis2021covid]. Understanding within region disparities on COVID-19 vaccines uptake in Ontario is particularly important since it’s has the most population as a province in Canada, a complex healthcare system, inequities in health services access and fragmented electronic health systems [@Liu2021Hesitancy]. Therefore, this study aims at analyzing the sociodemographic of COVID-19 vaccine uptake in Ontario, Canada. 
+
+
+## Research Question  
+
+**What are the demographic and regional determinants of COVID-19 vaccine uptake in Ontario?** 
+
+
+## Research Objectives
+
+**To identify the sociodemographic determinants factors influencing COVID-19 vaccine uptake among residents in Ontario**
+
+
+# METHODOLOGY 
+
+## Dataset Description
+
+The dataset used for this study was from the Public Health Ontario Website *(Archived) Ontario Respiratory Virus Tool --- COVID-19 Vaccine Data File* published by Public Health Ontario and archived on October 25, 2024 [@pho2024dataset]. The file is the official provincial record of COVID-19 vaccination counts extracted from the Ministry of Health's COVaxON application on December 4, 2023. Population denominators are 2023 Ontario population projections supplied by the Ontario Ministry of Finance.The Dataset had the number of individuals vaccinated for COVID-19 since the week of December 13, 2020, till December 2023. 
+ 
+
+
+## Dataset justification
+
+## Variables 
+
+### Outcome Variable
+
+The primary outcome variable of this study was COVID-19 vaccination status for Ontarians. Persons who had already received at least one dose of the COVID-19 vaccine were considered vaccinated, while those who had not received at least one dose of the COVID-19 vaccine were considered unvaccinated. This outcome variable was coded into binary where one (1) was for vaccinated with at least one dose of COVID-19 vaccine and zero (0) was not vaccinated with COVID-19 vaccine. Hence, the outcome variable was binary. 
+
+
+### Predictor Variable
+
+Independent variables which were available sociodemographic characteristics included gender (male, female, and Unknown) which was the main predictor variable of interest, age group (0-4 years, 5- 11 years, 12-17years, 18-29 years, 30–39 years, 40–49 years, 50-59 years, 60-69 years, 70-79 years, ≥80 years), and 34 public health units in Ontario. These variables will be included in the model as they have been shown in literature to impact the uptake of COVID-19 vaccine. The predictors will be used to create dummy variables. For the gender males will be used as the reference variable, age 80+ will be used as the reference variable for age group, while for the public health unit, Toronto will be used as the reference variable. 
+
+
+### Structure
+
+The dataset contains **720,720 observations** and **7 variables**:
+
+- `Public_health_unit`
+- `Gender`
+- `Age_group`
+- `Vaccination_status`
+- `Week_start_date`
+- `Number_of_individuals_vaccinated`
+- `Population`
+
+
+## Statistical Analysis Plan
+
+## Planned Workflow
+
+### Step 1: Data Sourcing 
+- Define data needed based on the research question.
+- Review available sources of provincial and national vaccination dataset.
+- Select the Ontario Dataset, download, record source and access date. 
+
+
+### Step 2: Project Setup
+
+- Create a GitHub repository.
+- Clone the repository.
+- Organize folders for data, scripts, and outputs.
+- Add a `README.md` with project details.
+
+
+### Step 3: Data Import
+
+- Read the Excel file from the correct sheet.
+- Clean column names using `janitor::clean_names()`.
+
+
+### Step 4: Data Inspection
+
+- Examine dimensions, variable names, structure, and summary statistics.
+- Check for missing values and inconsistencies.
+
+
+### Step 5: Data Wrangling
+
+- Convert variables to appropriate data types.
+- Standardize factor levels where needed.
+- Assess missingness in `population`.
+- Create derived variables if useful, such as:
+  - vaccination coverage (`number_of_individuals_vaccinated / population`)
+  - year or month from `week_start_date`
+  - reordered age groups for plotting
+
+
+### Step 6: Descriptive Statistics
+
+- Produce frequency tables for categorical variables.
+- Summarize numeric variables.
+- Compare vaccination counts across age groups, gender, and vaccination status.
+- Explore temporal trends in weekly vaccination counts.
+
+
+### Step 7: Visualization
+
+- Bar charts for vaccination status categories
+- Stacked or grouped bar charts by age group and gender
+- Line graphs for weekly vaccination trends
+
+
+### Step 8: Model Building
+- Logistic Regression (Baseline)
+- Random Forests [@breiman2001random] and 
+- Gradient boosted trees [@chen2016xgboost] 
+
+
+### Step 9: Reporting
+
+- Document data cleaning steps clearly.
+- Summarize initial observations.
+- Render the analysis into HTML output through R Markdown.
+- Push all files to GitHub.
+
+
+# EXPECTED OUTPUTS
+
+The GitHub repository will contain:
+
+- `README.md`
+- `analysis_plan.Rmd and html`
+- `Part1_datawrangling_descriptives.Rmd and html`
+- `Part2_machine_learning_analysis.Rmd and html`
+- `reference.bib`
+- `any output from the research`
+
+
+# ANTICIPATED CHALLENGES
+
+Potential challenges in this dataset include:
+
+- Missing values in the `population` variable,
+- Imbalance outcome variable
+- Repeated observations across vaccination categories and time,
+- Ensuring correct interpretation of aggregated counts.
+
+
+# ETHICAL CONSIDERATIONS
+
+Because this is an aggregated public health dataset and publicly available, it does not contain direct personal identifiers and does not need require any ethical approval. However, care will still be taken to interpret findings responsibly and avoid overstatement. Descriptive results will be framed as exploratory rather than causal.
+
+
+# CONCLUSION
+
+This analysis plan provides a structured and reproducible roadmap for examining Ontario vaccination patterns using R and GitHub. The next stage focuses on data wrangling and descriptive statistics to prepare the dataset for more advanced analysis.
+
+
+# REFERENCES
