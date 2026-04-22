@@ -1,0 +1,633 @@
+---
+title: "Machine-Learning Analysis of COVID-19 Vaccine Uptake in Ontario"
+author: "Maureen Amuche Nwobodo"
+date: "2026_04_20"
+output:
+  html_document:
+    toc: true
+    toc_depth: '3'
+    df_print: paged
+  pdf_document:
+    citation_package: biblatex
+    latex_engine: xelatex
+    toc: true
+    toc_depth: 3
+    number_sections: true
+subtitle: "Part 2 --- Wrangling, Missing-Data Handling, Model Tuning, and Comparison"
+bibliography: "C:/Users/bds268/OneDrive - University of Saskatchewan/Desktop/USL_PCA_files/references.bib"
+biblatexoptions:
+- backend=biber
+- style=numeric
+- sorting=none
+header-includes:
+- \usepackage{booktabs}
+- \usepackage{longtable}
+- \usepackage{array}
+- \usepackage{float}
+- \floatplacement{figure}{H}
+link-citations: true
+linkcolor: blue
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  echo       = TRUE,
+  warning    = FALSE,
+  message    = FALSE,
+  fig.width  = 7,
+  fig.height = 4.2,
+  fig.align  = "center",
+  cache      = FALSE
+)
+options(scipen = 999, digits = 4)
+```
+
+
+
+```{r libraries}
+# Wrangling & visualisation
+library(tidyverse)
+library(readxl)
+library(janitor)
+library(lubridate)
+library(scales)
+
+# Modelling
+library(tidymodels)
+library(ranger)      # random forest engine
+library(xgboost)     # gradient boosting engine
+library(vip)         # variable importance plot
+
+# Tables
+library(knitr)
+library(kableExtra)
+library(broom)
+```
+
+
+
+# Introduction
+
+Part 1 established a dataset — the *(Archived) Ontario Respiratory Virus Tool
+COVID-19 Vaccine Data File* [@pho2024dataset] — and an analysis plan motivated
+by a precursor binary-logistic-regression study. That precursor found
+significant sociodemographic disparities in vaccine uptake by gender, age
+group, and public health unit (PHU), echoing Canadian [@guay2022sociodemographic;
+@ortiz2024sociodemographic], UK [@nafilyan2021sociodemographic], and Ontario-specific
+paediatric [@karimi2024covid] evidence.
+
+This Part 2 report therefore replaces the single GLM with a `tidymodels`-based comparison of **three supervised classifiers** [@kuhn2020tidymodels; @kuhn2022tidymodels], chosen to span the
+bias–variance spectrum, all evaluated under one cross-validation scheme. Logistic regression anchors comparison to the earlier analysis.
+Random forest is justified because it handles nonlinearity and is less sensitive to some assumptions that failed in the precursor GLM.
+XGBoost is justified because it can learn higher-order interactions automatically, especially the Age × Gender and Age × PHU interactions identified earlier The
+six tasks this report addresses (corresponding to the Part 2 rubric) are:
+further wrangling, missing-data handling, ML implementation, hyper-parameter
+tuning, model comparison, and results + conclusion.
+
+# Data Wrangling and Preprocessing
+
+## Loading the Dataset
+
+```{r load}
+data <- read_excel("C:/Users/bds268/OneDrive - University of Saskatchewan/Desktop/USL_PCA_files/Ontario Vaccination Status.xlsx") |>
+  clean_names()
+
+glimpse(data)
+```
+
+
+## Setting Reference Categories
+
+To make machine-learning coefficients and variable-importance rankings
+comparable to the precursor, the same reference levels are fixed up front:
+**Male** for gender, **80+** for age, **Toronto Public Health** for PHU.
+
+```{r factor-levels}
+age_order <- c("0 to 4", "5 to 11", "12 to 17", "18 to 29", "30 to 39",
+               "40 to 49", "50 to 59", "60 to 69", "70 to 79", "80+")
+```
+
+**Reason.** The first level of a factor becomes the reference in `step_dummy()`.
+Failing to set Male / 80+ / Toronto explicitly would make the odds ratios and
+importance rankings produced by our models incomparable to Nwobodo (2025) and
+Guay et al. [@guay2022sociodemographic].
+
+# Handling Missing Data
+
+## Missingness Audit
+
+Before touching any values we inspect where the gaps are.
+
+```{r missing-audit, fig.cap = "Rows affected by each missing-value mechanism (counts on log-10 scale).", fig.height = 3.2}
+miss_summary <- tibble(
+  mechanism = c("Gender = 'Unknown'",
+                "Age group = 'Missing'",
+                "PHU = 'Unknown'",
+                "Population = NA",
+                "Total rows"),
+  rows = c(
+    sum(data$gender             == "Unknown"),
+    sum(data$age_group          == "Missing"),
+    sum(data$public_health_unit == "Unknown"),
+    sum(is.na(data$population)),
+    nrow(data)
+  )
+)
+
+miss_summary |>
+  filter(mechanism != "Total rows") |>
+  ggplot(aes(x = reorder(mechanism, rows), y = rows, fill = mechanism)) +
+  geom_col(width = 0.6) +
+  geom_text(aes(label = comma(rows)), hjust = -0.1) +
+  scale_y_log10(labels = label_comma(),
+                expand = expansion(mult = c(0, 0.3))) +
+  coord_flip() +
+  labs(x = NULL, y = "Rows affected (log10)",
+       title = "Missingness by mechanism") +
+  theme_minimal(base_size = 10) +
+  theme(legend.position = "none")
+```
+
+- High levels of missing data (≈33% for gender, ≈41% for population) were addressed using complete-case analysis. While this improves clarity, the missingness likely reflects administrative reporting patterns, potentially biasing results toward better-reported populations and limiting generalizability. it can be argued that this missing population could be from the underserved groups who may be underrepresented.
+
+```{r missing-table, echo = FALSE}
+miss_summary |>
+  mutate(percent_of_total = rows / nrow(data)) |>
+  kable(booktabs = TRUE, digits = 4,
+        col.names = c("Mechanism", "Rows affected", "% of total"),
+        caption = "Missing-value audit of the raw dataset.") |>
+  kable_styling(latex_options = c("hold_position"))
+```
+
+- Missing values (unknown gender, age, PHU, and population) were excluded because they reflect data limitations or suppressed information, making imputation inappropriate. Complete-case analysis was used to ensure valid outcomes, consistency with prior work, and sufficient sample size.
+
+
+```{r clean}
+clean <- data |>
+  filter(
+    gender             != "Unknown",
+    age_group          != "Missing",
+    public_health_unit != "Unknown",
+    !is.na(population),
+    population > 0
+  ) |>
+  mutate(
+    gender             = factor(gender, levels = c("Male", "Female")),
+    age_group          = factor(age_group, levels = age_order),
+    public_health_unit = fct_relevel(factor(public_health_unit),
+                                     "Toronto Public Health"),
+    vaccination_status = factor(vaccination_status),
+    week_start_date    = as.Date(week_start_date)
+  )
+
+tibble(
+  stage = c("data", "After missing-data handling"),
+  rows  = c(nrow(data), nrow(clean))
+) |>
+  kable(booktabs = TRUE, caption = "Rows before and after missing-data handling.")
+```
+
+## Building the Binary Outcome
+
+The precursor coded individuals who received at least one dose as 1 and
+everyone else as 0. We reproduce that coding using only the
+*"At least one dose"* rows (the broadest status, a superset of primary series
++ boosters), then subtract from the population denominator to obtain the
+unvaccinated count.
+
+```{r uptake}
+uptake <- clean |>
+  filter(vaccination_status == "At least one dose") |>
+  group_by(public_health_unit, gender, age_group) |>
+  summarise(
+    population   = max(population, na.rm = TRUE),
+    n_vaccinated = max(number_of_individuals_vaccinated, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(
+    n_unvaccinated = pmax(population - n_vaccinated, 0),
+    uptake_rate    = n_vaccinated / population
+  )
+
+uptake |>
+  summarise(
+    strata           = n(),
+    pop_total        = sum(population),
+    vaccinated_total = sum(n_vaccinated),
+    overall_uptake   = percent(vaccinated_total / pop_total, 0.1)
+  ) |>
+  kable(booktabs = TRUE, caption = "Cleaned stratum-level uptake summary.")
+```
+
+- Using the highest weekly count for each group captures the total number vaccinated by Dec 3, 2023—appropriate for overall uptake. Excluding the negative class from the denominator prevents counting the same individuals more than once (e.g., those with booster doses).
+
+
+## Building a Person-Level Sample for Modelling
+
+```{r expand-sample}
+# Sample 15 000 rows per class, weighted by the count in each stratum.
+# slice_sample(replace = TRUE) with weight_by is equivalent to
+# uncount() + slice_sample() but avoids ever materialising the expansion.
+set.seed(2025)
+vaxed_sample <- uptake |>
+  filter(n_vaccinated > 0) |>
+  slice_sample(n = 15000, weight_by = n_vaccinated, replace = TRUE) |>
+  mutate(vaccinated = factor("Yes", levels = c("No", "Yes")))
+
+set.seed(2026)
+unvaxed_sample <- uptake |>
+  filter(n_unvaccinated > 0) |>
+  slice_sample(n = 15000, weight_by = n_unvaccinated, replace = TRUE) |>
+  mutate(vaccinated = factor("No", levels = c("No", "Yes")))
+
+ml_data <- bind_rows(vaxed_sample, unvaxed_sample) |>
+  select(public_health_unit, gender, age_group, vaccinated)
+
+dim(ml_data)
+tabyl(ml_data, vaccinated) |> adorn_pct_formatting()
+```
+- By December 2023, vaccination uptake in Ontario was approximately **13.6%**. Uptake varied mainly by **age group** and **public health unit**, with smaller differences by gender, justifying predictive modeling. Expanding the data to the full person level (\~15 million rows) would be computationally infeasible.  Instead, we sample directly from the stratum-level table with weights proportional to the counts, Because the dataset contains only **680 unique predictor combinations**, a balanced sample of **30,000 rows** provides estimates equivalent to the full data while allowing models to run efficiently within an executable R Markdown workflow. 
+
+
+# Machine-Learning Methods
+
+## Train/Test Split and Resampling
+
+```{r split}
+set.seed(10)
+split  <- initial_split(ml_data, prop = 0.80, strata = vaccinated)
+train  <- training(split)
+test   <- testing(split)
+
+set.seed(10)
+folds  <- vfold_cv(train, v = 5, strata = vaccinated)
+```
+
+- An 80/20 split with stratification on `vaccinated` holds back a
+genuinely unseen test set and protects against an imbalanced fold if the
+class ratio shifts at the last minute. `vfold_cv(v = 5)` was chosen to keep
+tuning time reasonable for three models without meaningfully increasing
+the variance of the performance estimate or even crashing my system.
+
+
+## Feature-Engineering Recipe
+
+```{r recipe}
+rec <- recipe(vaccinated ~ gender + age_group + public_health_unit,
+              data = train) |>
+  step_dummy(all_nominal_predictors()) |>  # one-hot with ref levels from factors
+  step_zv(all_predictors())                 # drop any zero-variance dummies
+```
+
+- Trees technically do not need dummy encoding, but using the same
+recipe for all three models makes the comparison strictly apples-to-apples
+and prevents "model A secretly had different predictors from model B" bugs.
+`step_zv()` is a cheap insurance policy — if the 80 % training split happens
+not to contain, say, the Timiskaming × 0–4 year × Male cell, its dummy
+would be constant and would cause logistic regression to fail. Dropping
+such dummies solves it generically.
+
+
+## Model Specifications
+
+### Model 1 — Logistic Regression (Baseline)
+
+```{r spec-logit}
+logit_spec <- logistic_reg() |>
+  set_engine("glm") |>
+  set_mode("classification")
+```
+
+
+
+**Why include it?** Logistic regression is central to this analysis because it provides interpretable odds ratios that quantify the direction and magnitude of demographic disparities in vaccination uptake, complementing machine‑learning models that prioritize predictive accuracy over explanation.
+
+
+### Model 2 — Random Forest (Robust Non-Linear Ensemble)
+
+```{r spec-rf}
+rf_spec <- rand_forest(
+    trees = 200,
+    mtry  = tune(),
+    min_n = tune()
+  ) |>
+  set_engine("ranger", importance = "impurity") |>
+  set_mode("classification")
+```
+
+**Why include it?** Random forest was included to capture nonlinear relationships and interactions among demographic predictors that logistic regression cannot model automatically [@breiman2001random]. While it does not yield interpretable effect sizes such as odds ratios, it provides a flexible benchmark for predictive performance and confirms the relative importance of age and public health unit observed in the logistic regression analysis. Together, the two methods balance interpretability and predictive accuracy.
+
+
+### Model 3 — Gradient-Boosted Trees (Capturing Interactions)
+
+```{r spec-xgb}
+xgb_spec <- boost_tree(
+    trees      = 200,
+    tree_depth = tune(),
+    learn_rate = tune(),
+    min_n      = 10
+  ) |>
+  set_engine("xgboost") |>
+  set_mode("classification")
+```
+
+**Why include it?** Boosted trees [@chen2016xgboost] learn higher-order
+interactions automatically, so they directly target the significant Age ×
+Gender and Age × PHU interactions. We tune the two most influential hyperparameters — `tree_depth` (controls interaction order) and `learn_rate` (controls overfitting) — and fix the
+rest to modest defaults.
+
+
+## Assembling the Workflow Set
+
+```{r workflow-set}
+wf_set <- workflow_set(
+  preproc = list(base = rec),
+  models  = list(
+    logit = logit_spec,
+    rf    = rf_spec,
+    xgb   = xgb_spec
+  )
+)
+
+wf_set
+```
+
+**Reason.** A single `workflow_set` ensures all three models use the same
+recipe, same folds, and same metrics — the cleanest possible scaffold for
+a fair comparison.
+
+
+## Hyperparameter Tuning
+
+```{r tune, cache = TRUE}
+metric_list <- metric_set(roc_auc, accuracy, sensitivity, specificity, precision, brier_class)
+
+set.seed(10)
+tuned <- wf_set |>
+  workflow_map(
+    fn        = "tune_grid",
+    resamples = folds,
+    grid      = 5,                # 5 random candidates per tunable model
+    metrics   = metric_list,
+    control   = control_grid(save_pred     = TRUE,
+                             save_workflow = TRUE,
+                             verbose       = FALSE),
+    verbose   = FALSE
+  )
+```
+
+**Reason.** A 5-point random grid is small was intentionally chosen because the
+hyperparameter surfaces for RF and XGBoost on three low-cardinality
+predictors are very flat and a larger search adds runtime without improving
+the chosen tuple. `control_grid(save_pred = TRUE)` keeps the out-of-fold
+predictions so we can draw ROC curves later without re-fitting.
+
+
+# Model Comparison
+
+## Cross-Validated Metrics
+
+```{r compare-table}
+cv_results <- tuned |>
+  rank_results(rank_metric = "roc_auc", select_best = TRUE) |>
+  filter(.metric %in% c("roc_auc", "accuracy", "sensitivity", "specificity", "precision", "brier_class")) |>
+  select(wflow_id, .metric, mean, std_err, rank) |>
+  pivot_wider(names_from = .metric, values_from = c(mean, std_err))
+
+cv_results |>
+  select(wflow_id, mean_roc_auc, mean_accuracy, mean_sensitivity, mean_specificity, mean_precision, mean_brier_class) |>
+  arrange(desc(mean_roc_auc)) |>
+  kable(
+    booktabs = TRUE, digits = 3,
+    col.names = c("Workflow", "ROC-AUC", "Accuracy", "Sensitivity", "precision", "brier_class",
+                  "Specificity"),
+    caption = "Cross-validated performance of the best tuple from each model."
+  ) |>
+  kable_styling(latex_options = c("hold_position"))
+```
+
+- Interpretation
+
+All models perform similarly Boosting wins, but by a small margin. This is expected given: Limited predictors, and Strong linear effects already captured by GLM
+
+
+
+# Visualization Tunning
+
+```{r compare-plot, fig.cap = "5-fold cross-validated ROC-AUC by model (point = mean, bar = ±1 SE)."}
+autoplot(tuned, select_best = TRUE, metric = "roc_auc") +
+  labs(title = NULL,
+       x = "Workflow", y = "ROC-AUC (5-fold CV)") +
+  theme_minimal(base_size = 11)
+```
+
+
+**Reason for choosing ROC-AUC as the primary metric.** Accuracy is a fine
+secondary metric but it collapses when the class balance changes; ROC-AUC
+[@fawcett2006introduction] summarises performance across all decision
+thresholds and is the standard for class-imbalanced public-health
+classification problems. Sensitivity and specificity are reported alongside.
+
+
+## Finalising the Best Model
+
+```{r finalize}
+best_id <- cv_results |>
+  arrange(desc(mean_roc_auc)) |>
+  slice(1) |>
+  pull(wflow_id)
+
+best_id
+
+best_params <- tuned |>
+  extract_workflow_set_result(best_id) |>
+  select_best(metric = "roc_auc")
+
+final_wf <- tuned |>
+  extract_workflow(best_id) |>
+  finalize_workflow(best_params)
+
+final_fit <- last_fit(final_wf, split = split,
+                      metrics = metric_list)
+
+collect_metrics(final_fit) |>
+  select(.metric, .estimate) |>
+  kable(booktabs = TRUE, digits = 3,
+        caption = paste("Held-out test-set performance of the best model (",
+                        best_id, ").")) |>
+  kable_styling(latex_options = c("hold_position"))
+```
+
+**Reason.** `last_fit()` fits the finalised workflow on the *entire*
+training set and evaluates once on the test set. This is the one
+time in the whole analysis that the test data is touched to avoid data leak.
+
+
+# Adjusted Odds Ratios from Logistic Regression
+
+```{r}
+
+logit_wf <- extract_workflow(wf_set, "base_logit")
+```
+
+```{r}
+logit_final_fit <- last_fit(
+  logit_wf,
+  split
+)
+```
+
+```{r}
+
+tidy(
+  extract_fit_parsnip(logit_final_fit),
+  exponentiate = TRUE,
+  conf.int = TRUE
+)
+
+```
+
+- Logistic regression revealed that age group is the dominant predictor of COVID‑19 vaccination uptake, with all younger age groups showing substantially different odds relative to adults aged 80 and older. Public health unit differences were also pronounced, particularly for rural and northern regions, which exhibited lower odds compared with Toronto. Gender effects were small and statistically weak, suggesting minimal independent contribution after adjusting for age and geography. Additionally, Female vs Male: OR ≈ 0.96 with 95% CI: approximately 0.91 to 1.01 and p‑value ≈ 0.09. Gender has a very small and statistically weak effect. Females have slightly lower odds of vaccination than males in this model, but the confidence interval includes 1, indicating no strong evidence of a gender disparity after adjusting for age and PHU.
+
+
+## ROC Curves on the Test Set
+
+```{r roc-curves, fig.cap = "ROC curves on the held-out 20% test set."}
+# Refit each best tuple on training, predict on test, build ROC data
+roc_df <- map_dfr(c("base_logit", "base_rf", "base_xgb"), function(id) {
+  pars <- tuned |>
+    extract_workflow_set_result(id) |>
+    select_best(metric = "roc_auc")
+  fit  <- tuned |>
+    extract_workflow(id) |>
+    finalize_workflow(pars) |>
+    last_fit(split = split, metrics = metric_list)
+  collect_predictions(fit) |>
+    mutate(model = id)
+})
+
+roc_df |>
+  group_by(model) |>
+  roc_curve(truth = vaccinated, .pred_Yes, event_level = "second") |>
+  ggplot(aes(1 - specificity, sensitivity, colour = model)) +
+  geom_path(linewidth = 0.8) +
+  geom_abline(linetype = "dashed", colour = "grey60") +
+  coord_equal() +
+  scale_colour_brewer(palette = "Dark2",
+                      labels = c("Logistic", "Random forest", "XGBoost")) +
+  labs(x = "1 – Specificity (False-positive rate)",
+       y = "Sensitivity (True-positive rate)",
+       colour = NULL) +
+  theme_minimal(base_size = 11)
+```
+
+- The ROC curves for logistic regression, random forest, and XGBoost overlapped almost perfectly, indicating that more complex machine learning methods did not substantially improve predictive performance over the baseline logistic model. This suggests that the relationship between predictors and vaccine uptake is largely linear and that additional model complexity provides limited benefit.
+
+
+
+## Confusion Matrix for the Winning Model
+
+```{r confusion, fig.cap = "Confusion matrix of the winning model on the test set (default 0.5 threshold)."}
+collect_predictions(final_fit) |>
+  conf_mat(truth = vaccinated, estimate = .pred_class) |>
+  autoplot(type = "heatmap") +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(title = NULL) +
+  theme_minimal(base_size = 11)
+```
+
+-Confusion matrix (winning model) shows Model is better at identifying vaccinated individuals than non‑vaccinated.The model has moderate predictive ability but is not highly accurate. While it performs reasonably well in identifying individuals who are not vaccinated, it struggles to correctly classify vaccinated individuals, as evidenced by the high number of false negatives.
+Moderate sensitivity (~0.63)
+Moderate specificity (~0.52)
+
+
+## Variable Importance
+
+```{r vip, fig.cap = "Top predictors from the winning model (permutation / impurity importance).", fig.height = 4.5}
+final_fit |>
+  extract_fit_parsnip() |>
+  vip::vip(num_features = 15, geom = "col",
+           aesthetics = list(fill = "steelblue")) +
+  labs(x = "Importance", y = NULL) +
+  theme_minimal(base_size = 10)
+```
+
+- Variable importance analysis indicates that age group is the dominant predictor of COVID-19 vaccine uptake, with older age groups (particularly 70–79 and 80+) and younger children (5–11) contributing most to model performance. Public health unit also plays a meaningful but secondary role, suggesting geographic disparities in uptake. In contrast, gender shows relatively low importance, indicating it has limited influence on vaccination patterns in this dataset. Overall, these findings highlight that vaccine uptake is primarily structured by age and, to a lesser extent, regional context.
+
+
+
+
+
+# Results
+
+This study examined whether COVID-19 vaccine uptake in Ontario can be predicted using sociodemographic characteristics, specifically age group, gender, and public health unit (PHU). Three supervised learning models—logistic regression, random forest, and gradient-boosted trees (XGBoost) were trained and evaluated using a consistent preprocessing pipeline and an 80/20 train-test split with cross-validation.
+
+## Model Performance
+
+Across all models, predictive performance was modest. On the held-out test set, the best-performing model (XGBoost) achieved a ROC-AUC of approximately 0.61, indicating limited but meaningful discrimination between vaccinated and non-vaccinated individuals. Accuracy was approximately 57%, with sensitivity (~63%) exceeding specificity (~67%), suggesting the model was somewhat better at identifying vaccinated individuals than non-vaccinated individuals.
+
+The ROC curves for all three models overlapped almost completely, indicating that more complex machine learning methods did not substantially improve predictive performance over logistic regression. This suggests that the relationship between the predictors and vaccine uptake is relatively simple and largely captured by linear effects, with limited gains from modeling nonlinearities or interactions.
+
+## Classification Performance
+
+The confusion matrix further illustrates the model’s behavior. While a substantial number of individuals were correctly classified (true positives and true negatives), the model produced a relatively high number of false negatives, meaning that many vaccinated individuals were incorrectly classified as unvaccinated. This pattern indicates that, although the model captures general trends in uptake, it struggles to precisely distinguish individuals at the margin.
+
+## Variable Importance
+
+Variable importance analysis revealed that age group was the dominant predictor of vaccine uptake, with the highest contributions from older age groups (70–79 and 80+) and younger children (5–11). These patterns likely reflect differences in vaccine rollout phases, eligibility, and risk perception across age groups.
+
+Geographic location, represented by PHU, also contributed to model performance, though to a lesser extent, suggesting regional variation in vaccine uptake. In contrast, gender had relatively low importance, indicating that it played a minor role in predicting vaccination status within this dataset.
+
+## Overall Interpretation
+
+Taken together, these findings indicate that while sociodemographic variables contain some predictive signal, their ability to accurately classify vaccine uptake is limited. Age emerges as the primary driver of uptake patterns, with additional contributions from geographic context, but these variables alone are insufficient for high-accuracy prediction.
+
+Importantly, the minimal performance difference between logistic regression and more complex models suggests that increasing model complexity does not meaningfully improve predictive accuracy in this context, reinforcing the conclusion that the available predictors capture only part of the underlying determinants of vaccine uptake.
+
+## Implications for the Research Question
+
+Overall, the analysis demonstrates that COVID-19 vaccine uptake can be predicted to a limited extent using age, gender, and geographic location. However, the modest performance metrics and overlapping model results suggest that additional factors—such as socioeconomic status, access to healthcare, and behavioral determinants—are likely needed to more fully explain and predict vaccination patterns.
+
+
+# Strengths
+
+- **Same recipe, same folds, same metrics.** The three-model comparison is
+  strictly apples-to-apples.
+- **Honest test set.** The test data is touched exactly once, inside
+  `last_fit()`, which gives an unbiased generalisation estimate.
+- **Reproducibility.** All random operations are seeded, the data-handling
+  pipeline is deterministic, and the subsample size is justified rather
+  than arbitrary.
+
+
+## Limitations
+
+### Limited number of predictors available 
+
+Sociodemographic variables known from the literature to matter ethnicity, socioeconomic status, marital status, education, immigration status, occupation are absent from the
+Public Health Ontario file. This caps the achievable AUC and is the single
+largest driver of the modest ensemble-over-GLM gap.
+
+### Complete-case handling of missing data.* The "Unknown"/"Missing" category
+
+labels cover roughly 11.7 % of raw rows. Dropping them leaves open the possibility of selection bias if these rows are systematically different (e.g. if gender is missing more often for
+specific age bands). Multiple imputation [@vanbuuren2011mice] was not
+attempted here because the missingness is on nominal variables with no
+auxiliary predictors to impute from — an MI model would essentially
+re-sample from the marginal distribution and would not outperform a
+drop-row approach.
+
+### Temporal dynamics are ignored.* 
+
+The weekly roll-out history is collapsed to a single cumulative-by-Dec-2023 snapshot. A time-to-vaccination analysis (survival model with PHU-age-gender covariates) would give a different and probably richer view of uptake dynamics.
+
+
+# Conclusion
+
+This analysis used a `tidymodels` workflow to predict COVID-19 vaccine uptake in Ontario from
+three sociodemographic predictors, comparing three supervised
+classifiers — logistic regression, random forest, and gradient-boosted
+trees — under one shared recipe, one 5-fold CV scheme, and one metric set.
+
+
+# References
