@@ -75,7 +75,7 @@ The analysis expects all the documents should be the same folder
 ### 3. Open the R Markdown files in RStudio
 Recommended order:
 1. `analysis_plan.Rmd & html`
-2. `Part1_data wrangling_Descriptives.Rmd & html`
+2. `Part1_data_wrangling_Descriptives.Rmd & html`
 3. `part2_machine_learning_analysis.Rmd & html`
 4. `reference.bib`
 
