@@ -1,5 +1,5 @@
 
-# Ontario COVID-19 Vaccination Status Analysis
+# Sociodemographic Determinants of COVID-19 Vaccine Uptake in Ontario
 
 ## Project Overview
 
